@@ -1,5 +1,13 @@
 # netpulse-docker
 
+[![docker](https://github.com/t0bs000r/netpulse-docker/actions/workflows/docker.yml/badge.svg)](https://github.com/t0bs000r/netpulse-docker/actions/workflows/docker.yml)
+[![NetPulse release](https://img.shields.io/github/v/release/gnacho/netpulse?filter=v*&label=netpulse)](https://github.com/gnacho/netpulse/releases)
+[![Image](https://img.shields.io/badge/image-ghcr.io%2Ft0bs000r%2Fnetpulse-2496ED?logo=docker&logoColor=white)](https://github.com/t0bs000r/netpulse-docker/pkgs/container/netpulse)
+[![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64%20%7C%20arm%2Fv7-informational)](.github/workflows/docker.yml)
+[![Base](https://img.shields.io/badge/base-alpine-0D597F?logo=alpinelinux&logoColor=white)](Dockerfile)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](https://github.com/gnacho/netpulse/blob/main/LICENSE)
+[![Maintained with AI](https://img.shields.io/badge/maintained%20with-Claude%20Code-D97757?logo=claude&logoColor=white)](CLAUDE.md)
+
 > [!NOTE]
 > **This repository is maintained with AI.** The Dockerfile, workflow and
 > docs were written and are updated by [Claude Code](https://claude.ai/code)
