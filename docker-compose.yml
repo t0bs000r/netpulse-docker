@@ -1,0 +1,22 @@
+services:
+  netpulse:
+    image: ghcr.io/t0bs000r/netpulse:latest
+    container_name: netpulse
+    restart: unless-stopped
+    # Host networking lets NetPulse see your LAN the way a bare-metal install
+    # does (gateway autodetection, router discovery, agents pushing to it).
+    # With bridge networking instead, drop this line, add
+    #   ports: ["3000:3000"]
+    # and set NETPULSE_PUBLIC_URL to the host's LAN address.
+    network_mode: host
+    environment:
+      AUTH_USER: admin
+      AUTH_PASS: change-me-please   # required, at least 10 characters
+      TZ: Europe/Berlin
+      # DEMO_MODE: "1"              # demo dataset, nothing written to the DB
+      # NETPULSE_PUBLIC_URL: http://192.168.1.10:3000
+    volumes:
+      - netpulse-data:/data
+
+volumes:
+  netpulse-data:

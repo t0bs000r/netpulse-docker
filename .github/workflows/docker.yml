@@ -1,0 +1,124 @@
+name: docker
+
+# Builds the NetPulse server image for every architecture upstream ships
+# (linux/amd64, linux/arm64, linux/arm/v7) and pushes it to GHCR.
+#
+# - schedule: checks gnacho/netpulse for a new stable release and builds it
+#   only if that version is not on GHCR yet.
+# - push to main / workflow_dispatch: always (re)builds, so Dockerfile
+#   changes ship right away. workflow_dispatch can pin an older version.
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .github/workflows/docker.yml
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'NetPulse version to build (e.g. 2.43.0). Empty = latest release.'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: gnacho/netpulse
+  PLATFORMS: linux/amd64,linux/arm64,linux/arm/v7
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      image: ${{ steps.v.outputs.image }}
+      build: ${{ steps.v.outputs.build }}
+      latest: ${{ steps.v.outputs.latest }}
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/netpulse"
+          # Newest stable server release. Upstream also tags agent releases
+          # (agent/vX) and a rolling go-latest prerelease; skip both.
+          latest=$(gh api "repos/${UPSTREAM}/releases?per_page=30" \
+            --jq '[.[] | select(.draft == false and .prerelease == false and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")))][0].tag_name')
+          latest="${latest#v}"
+          [ -n "$latest" ] || { echo "::error::no upstream release found"; exit 1; }
+
+          version="${INPUT_VERSION#v}"
+          version="${version:-$latest}"
+
+          build=true
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] \
+             && docker buildx imagetools inspect "${image}:${version}" >/dev/null 2>&1; then
+            echo "${image}:${version} already published, nothing to do"
+            build=false
+          fi
+
+          {
+            echo "version=${version}"
+            echo "image=${image}"
+            echo "build=${build}"
+            echo "latest=$([ "$version" = "$latest" ] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+          echo "upstream latest: ${latest}; building: ${version} (${build})"
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ needs.resolve.outputs.image }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.resolve.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.resolve.outputs.version }},enable=${{ needs.resolve.outputs.latest }}
+            type=semver,pattern={{major}},value=${{ needs.resolve.outputs.version }},enable=${{ needs.resolve.outputs.latest }}
+            type=raw,value=latest,enable=${{ needs.resolve.outputs.latest }}
+          labels: |
+            org.opencontainers.image.version=${{ needs.resolve.outputs.version }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ env.PLATFORMS }}
+          build-args: NETPULSE_VERSION=${{ needs.resolve.outputs.version }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
