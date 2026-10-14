@@ -12,11 +12,12 @@ services:
     environment:
       AUTH_USER: admin
       AUTH_PASS: change-me-please   # required, at least 10 characters
-      TZ: Europe/Berlin
       # DEMO_MODE: "1"              # demo dataset, nothing written to the DB
       # NETPULSE_PUBLIC_URL: http://192.168.1.10:3000
     volumes:
       - netpulse-data:/data
+      # The image has no timezone database; this gives it the host's local time.
+      - /etc/localtime:/etc/localtime:ro
 
 volumes:
   netpulse-data:

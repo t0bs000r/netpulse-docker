@@ -1,34 +1,40 @@
 name: docker
 
-# Builds the NetPulse server image for every architecture upstream ships
-# (linux/amd64, linux/arm64, linux/arm/v7) and pushes it to GHCR.
+# Publishes the NetPulse server image to GHCR for every architecture
+# upstream ships (linux/amd64, linux/arm64, linux/arm/v7).
 #
-# - schedule: checks gnacho/netpulse for a new stable release and builds it
-#   only if that version is not on GHCR yet.
-# - push to main / workflow_dispatch: always (re)builds, so Dockerfile
-#   changes ship right away. workflow_dispatch can pin an older version.
+# A new image is only pushed when gnacho/netpulse has a stable release that
+# is not on GHCR yet:
+# - schedule: checks upstream every 6 hours.
+# - workflow_dispatch: same check by hand; `force` rebuilds an existing tag.
+# - push / pull_request touching the image: build + smoke test only, never
+#   pushes, so changes are verified before the next release ships them.
 
 on:
   schedule:
     - cron: '17 */6 * * *'
-  push:
-    branches: [main]
-    paths:
-      - Dockerfile
-      - .github/workflows/docker.yml
   workflow_dispatch:
     inputs:
       version:
-        description: 'NetPulse version to build (e.g. 2.43.0). Empty = latest release.'
+        description: 'NetPulse version (e.g. 2.43.0). Empty = latest release.'
         required: false
         default: ''
+      force:
+        description: 'Rebuild and push even if the tag already exists.'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: [Dockerfile, .github/workflows/docker.yml]
+  pull_request:
+    paths: [Dockerfile, .github/workflows/docker.yml]
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: docker
+  group: docker-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -36,13 +42,8 @@ env:
   PLATFORMS: linux/amd64,linux/arm64,linux/arm/v7
 
 jobs:
-  resolve:
+  build:
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.v.outputs.version }}
-      image: ${{ steps.v.outputs.image }}
-      build: ${{ steps.v.outputs.build }}
-      latest: ${{ steps.v.outputs.latest }}
     steps:
       - uses: docker/login-action@v3
         with:
@@ -50,10 +51,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - id: v
+      - name: Resolve version
+        id: v
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ inputs.version }}
+          FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
           image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/netpulse"
@@ -67,57 +70,90 @@ jobs:
           version="${INPUT_VERSION#v}"
           version="${version:-$latest}"
 
-          build=true
-          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] \
-             && docker buildx imagetools inspect "${image}:${version}" >/dev/null 2>&1; then
-            echo "${image}:${version} already published, nothing to do"
-            build=false
-          fi
+          case "$GITHUB_EVENT_NAME" in
+            push|pull_request) publish=false; build=true ;;
+            *)
+              publish=true; build=true
+              if [ "$FORCE" != "true" ] \
+                 && docker buildx imagetools inspect "${image}:${version}" >/dev/null 2>&1; then
+                echo "${image}:${version} is already published; nothing to do."
+                publish=false; build=false
+              fi ;;
+          esac
 
           {
             echo "version=${version}"
             echo "image=${image}"
             echo "build=${build}"
+            echo "publish=${publish}"
             echo "latest=$([ "$version" = "$latest" ] && echo true || echo false)"
           } >> "$GITHUB_OUTPUT"
-          echo "upstream latest: ${latest}; building: ${version} (${build})"
+          echo "upstream latest ${latest}, version ${version}, build ${build}, publish ${publish}"
 
-  build:
-    needs: resolve
-    if: needs.resolve.outputs.build == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      - if: steps.v.outputs.build == 'true'
+        uses: actions/checkout@v4
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - if: steps.v.outputs.build == 'true'
+        uses: docker/setup-qemu-action@v3
 
-      - uses: docker/login-action@v3
+      - if: steps.v.outputs.build == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build amd64 for smoke test
+        if: steps.v.outputs.build == 'true'
+        uses: docker/build-push-action@v6
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          context: .
+          platforms: linux/amd64
+          build-args: NETPULSE_VERSION=${{ steps.v.outputs.version }}
+          load: true
+          tags: netpulse:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        if: steps.v.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          layers=$(docker image inspect netpulse:smoke --format '{{len .RootFS.Layers}}')
+          echo "layers: ${layers}"
+          [ "$layers" -eq 1 ] || { echo "::error::expected 1 layer, got ${layers}"; exit 1; }
+          docker run --rm --entrypoint sh netpulse:smoke -c \
+            'command -v ssh ssh-keygen ssh-keyscan ip wget && echo 192.168.1.2 | grep -oP "\d+\.\d+"'
+          docker run -d --name smoke -e AUTH_PASS=smoke-test-pass -e DEMO_MODE=1 netpulse:smoke
+          for _ in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' smoke)
+            [ "$status" = healthy ] && break
+            sleep 3
+          done
+          docker logs smoke
+          docker exec smoke wget -qO- http://127.0.0.1:3000/api/health
+          [ "$status" = healthy ] || { echo "::error::container never became healthy"; exit 1; }
+          docker rm -f smoke
 
       - id: meta
+        if: steps.v.outputs.publish == 'true'
         uses: docker/metadata-action@v5
         with:
-          images: ${{ needs.resolve.outputs.image }}
+          images: ${{ steps.v.outputs.image }}
           tags: |
-            type=semver,pattern={{version}},value=${{ needs.resolve.outputs.version }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ needs.resolve.outputs.version }},enable=${{ needs.resolve.outputs.latest }}
-            type=semver,pattern={{major}},value=${{ needs.resolve.outputs.version }},enable=${{ needs.resolve.outputs.latest }}
-            type=raw,value=latest,enable=${{ needs.resolve.outputs.latest }}
+            type=semver,pattern={{version}},value=${{ steps.v.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.v.outputs.version }},enable=${{ steps.v.outputs.latest }}
+            type=semver,pattern={{major}},value=${{ steps.v.outputs.version }},enable=${{ steps.v.outputs.latest }}
+            type=raw,value=latest,enable=${{ steps.v.outputs.latest }}
           labels: |
-            org.opencontainers.image.version=${{ needs.resolve.outputs.version }}
+            org.opencontainers.image.version=${{ steps.v.outputs.version }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
-      - uses: docker/build-push-action@v6
+      - name: Build all platforms
+        if: steps.v.outputs.build == 'true'
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: ${{ env.PLATFORMS }}
-          build-args: NETPULSE_VERSION=${{ needs.resolve.outputs.version }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          build-args: NETPULSE_VERSION=${{ steps.v.outputs.version }}
+          push: ${{ steps.v.outputs.publish == 'true' }}
+          tags: ${{ steps.meta.outputs.tags || 'netpulse:ci' }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
