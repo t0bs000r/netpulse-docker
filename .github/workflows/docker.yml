@@ -115,9 +115,18 @@ jobs:
         if: steps.v.outputs.build == 'true'
         run: |
           set -euo pipefail
-          layers=$(docker image inspect netpulse:smoke --format '{{len .RootFS.Layers}}')
-          echo "layers: ${layers}"
-          [ "$layers" -eq 1 ] || { echo "::error::expected 1 layer, got ${layers}"; exit 1; }
+          # Expect exactly two layers: the unmodified Alpine base, then one
+          # layer with packages, user and the netpulse binary.
+          alpine=$(sed -n 's/^ARG ALPINE_VERSION=//p' Dockerfile)
+          docker pull -q "alpine:${alpine}" >/dev/null
+          base=$(docker image inspect "alpine:${alpine}" --format '{{json .RootFS.Layers}}')
+          layers=$(docker image inspect netpulse:smoke --format '{{json .RootFS.Layers}}')
+          echo "alpine ${alpine} base: ${base}"
+          echo "image layers: ${layers}"
+          [ "$(echo "$layers" | jq length)" -eq 2 ] \
+            || { echo "::error::expected 2 layers, got $(echo "$layers" | jq length)"; exit 1; }
+          [ "$(echo "$layers" | jq -r '.[0]')" = "$(echo "$base" | jq -r '.[0]')" ] \
+            || { echo "::error::first layer is not the unmodified alpine:${alpine} base"; exit 1; }
           docker run --rm --entrypoint sh netpulse:smoke -c \
             'command -v ssh ssh-keygen ssh-keyscan ip wget && echo 192.168.1.2 | grep -oP "\d+\.\d+"'
           docker run -d --name smoke -e AUTH_PASS=smoke-test-pass -e DEMO_MODE=1 netpulse:smoke

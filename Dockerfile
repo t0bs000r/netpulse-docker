@@ -7,8 +7,9 @@
 # Go/Node toolchain is needed: we download the tarball for the target arch,
 # verify it against the release's checksums.txt and drop it on Alpine.
 #
-# The final image is FROM scratch with the assembled root filesystem copied
-# in, so it is a single layer.
+# The final image has two layers: the unmodified Alpine base (shared with
+# other Alpine images and cached across updates) and one layer with the
+# runtime packages, the user and the netpulse binary.
 
 ARG NETPULSE_VERSION=2.43.0
 ARG ALPINE_VERSION=3.22
@@ -35,20 +36,42 @@ RUN set -eu; \
     tar -xzf "${file}" -C /out/app netpulse LICENSE THIRD_PARTY.md; \
     test -x /out/app/netpulse
 
-# Assemble the runtime filesystem for the target arch.
+FROM alpine:${ALPINE_VERSION} AS base
+
+# Install what the server needs on top of Alpine, then collect only the
+# files that differ from the pristine base into /overlay. The final image is
+# the untouched Alpine layer plus that one overlay layer.
 # Runtime tools the server shells out to: ssh, ssh-keygen, ssh-keyscan
 # (router polling, key management) and GNU grep for `grep -P` (LAN
 # discovery). `ip` and `wget` (healthcheck) come from busybox.
-FROM alpine:${ALPINE_VERSION} AS rootfs
+FROM base AS overlay
 COPY --from=fetch /out/app /app
-RUN apk add --no-cache openssh-client-default grep \
- && adduser -S -D -H -u 10001 -h /data -s /sbin/nologin netpulse \
- && mkdir -p /data \
- && chown netpulse /data
+RUN --mount=type=bind,from=base,target=/base \
+    set -euo pipefail; \
+    apk add --no-cache openssh-client-default grep; \
+    adduser -S -D -H -u 10001 -h /data -s /sbin/nologin netpulse; \
+    mkdir -p /data; \
+    chown netpulse /data; \
+    find / -mindepth 1 \( -path /base -o -path /proc -o -path /sys -o -path /dev \
+      -o -path /tmp -o -path /run -o -path /etc/hosts -o -path /etc/hostname \
+      -o -path /etc/resolv.conf \) -prune -o -print \
+    | while IFS= read -r f; do \
+        b="/base$f"; \
+        if [ -L "$f" ]; then \
+          [ -L "$b" ] && [ "$(readlink "$f")" = "$(readlink "$b")" ] && continue; \
+        elif [ -e "$b" ] && [ ! -L "$b" ] \
+             && [ "$(stat -c %F:%u:%g:%a "$f")" = "$(stat -c %F:%u:%g:%a "$b")" ]; then \
+          [ -d "$f" ] && continue; \
+          cmp -s "$f" "$b" && continue; \
+        fi; \
+        echo "$f"; \
+      done > /tmp/changed; \
+    mkdir /overlay; \
+    tar -cf - --no-recursion -T /tmp/changed | tar -xpf - -C /overlay
 
-FROM scratch
+FROM base
 ARG NETPULSE_VERSION
-COPY --from=rootfs / /
+COPY --from=overlay /overlay/ /
 
 LABEL org.opencontainers.image.title="netpulse" \
       org.opencontainers.image.description="NetPulse home network monitoring server (unofficial image)" \
@@ -59,10 +82,9 @@ LABEL org.opencontainers.image.title="netpulse" \
 # Configuration comes from environment variables (see upstream
 # server-go/.env.example). DATA_DIR holds the SQLite DB, SSH keys and TLS
 # material, so mount a volume there. No WORKDIR on purpose: it would add a
-# second layer, and the server only uses its working directory to look for
+# third layer, and the server only uses its working directory to look for
 # an optional .env file.
-ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    PORT=3000 \
+ENV PORT=3000 \
     DATA_DIR=/data \
     HOME=/data \
     SSH_KEY_PATH=/data/.ssh/id_ed25519

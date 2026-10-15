@@ -25,7 +25,9 @@ The image is kept as small as possible:
 - It is Alpine-based with only what the server shells out to: `ssh`,
   `ssh-keygen` and `ssh-keyscan` for polling routers, and GNU `grep` for LAN
   discovery. `ip` and `wget` come from busybox.
-- It is a single layer (`FROM scratch` plus one copied root filesystem).
+- It has two layers: the unmodified Alpine base, which is shared with other
+  Alpine images and isn't downloaded again on updates, and one layer with the
+  packages and the netpulse binary.
 - It runs as an unprivileged user (uid 10001).
 
 Platforms: `linux/amd64`, `linux/arm64` and `linux/arm/v7`. Upstream
