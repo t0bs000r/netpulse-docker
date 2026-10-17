@@ -40,6 +40,7 @@ docker run -d --name netpulse --network host \
   -e AUTH_PASS='at-least-10-chars' \
   -v netpulse-data:/data \
   -v /etc/localtime:/etc/localtime:ro \
+  - p 3000:3000 
   ghcr.io/t0bs000r/netpulse:latest
 ```
 
