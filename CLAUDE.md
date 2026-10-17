@@ -46,8 +46,10 @@ Files:
   busybox grep has no `-P`). `git` and `uci` are only used in other install
   layouts.
 - Config comes from env vars, plus an optional `.env` in the working
-  directory. `AUTH_PASS` (at least 10 characters) is required, otherwise it
-  exits at startup. Health endpoint: `GET /api/health`.
+  directory. `AUTH_PASS` is the only required variable: at least 10
+  characters and no placeholder words (`cambia`, `changeme`, `change-me`,
+  `example`, `placeholder`, `your-secret`, `replace_me`), otherwise it exits
+  at startup. Never use such words in example passwords in the docs. Health endpoint: `GET /api/health`.
 - `DATA_DIR=/data` holds the DB, SSH keys and TLS. Its self-updater can't
   apply updates in a container, it only reports them.
 - Release assets: `netpulse_<ver>_linux_<amd64|arm64|armv7>.tar.gz` plus

@@ -11,7 +11,10 @@ services:
     network_mode: host
     environment:
       AUTH_USER: admin
-      AUTH_PASS: change-me-please   # required, at least 10 characters
+      # Required: at least 10 characters. Put AUTH_PASS=... in a .env file next
+      # to this file. netpulse refuses values containing "changeme", "example"
+      # and similar placeholders.
+      AUTH_PASS: ${AUTH_PASS:?set AUTH_PASS (at least 10 characters)}
       # DEMO_MODE: "1"              # demo dataset, nothing written to the DB
       # NETPULSE_PUBLIC_URL: http://192.168.1.10:3000
     volumes:

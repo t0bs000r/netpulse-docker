@@ -48,7 +48,10 @@ for a compose setup.
 
 Every variable from upstream's
 [`server-go/.env.example`](https://github.com/gnacho/netpulse/blob/main/server-go/.env.example)
-can be passed with `-e`. `AUTH_PASS` is required.
+can be passed with `-e`. Only `AUTH_PASS` is required: at least 10
+characters, and netpulse refuses values that look like placeholders
+(containing `changeme`, `change-me`, `example`, `placeholder` and so on).
+It sets the password of the `admin` user on the first start.
 
 `/data` holds the SQLite database, the generated SSH keys (`/data/.ssh`) and
 TLS material, so keep it on a volume. The image has no timezone database.
