@@ -36,7 +36,7 @@ releases the server for exactly these.
 ## Run
 
 ```sh
-docker run -d --name netpulse --network host \
+docker run -d --name netpulse \
   -e AUTH_PASS='at-least-10-chars' \
   -v netpulse-data:/data \
   -v /etc/localtime:/etc/localtime:ro \
